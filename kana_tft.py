@@ -25,6 +25,7 @@ import threading
 import time
 import ConfigParser
 import sched
+import sys
 
 from pygame.locals import *
 from subprocess import call  
@@ -47,9 +48,9 @@ def objectCallback(n): # Pass 1 (next setting) or -1 (prev setting)
 	print str(screenMode) + "/" + str(len(buttons) - 1)
 
 def goToCommandCallback():
-	global clock
+	global clock,backlight_timer
 	clock = False
-
+	backlight_timer = 0
 	print "Go to commands"
 	print "Drawing Commands"
 
@@ -61,8 +62,10 @@ def goToCommandCallback():
 
 def goToClockCallback(): # Exit settings
 	global clock,clock_refresh_thread
+	global backlight_timer,backlight_timeout,backlight_state
+	backlight_state = True
+	backlight_timer = 0
 	clock = True
-
 	print "Go to clock"
 	print "Drawing Clock"
 
@@ -75,13 +78,14 @@ def goToClockCallback(): # Exit settings
 	clock_refresh_thread.start()
 	
 def display_time(): 
-	global clock
+	global clock,backlight_timer,backlight_state
 	while(clock):
+		print backlight_state
 		actual_time = time.strftime('%H:%M:%S')
 		actual_date = time.strftime("%a, %d %b %Y")
 		print actual_time
 		print actual_date
-    	# do your stuff
+		# do your stuff
 		label = clock_font_hour.render(actual_time, 1, (255,255,255))
 		screen.fill((0,0,0,0), (0,0,320,150))
 		screen.blit(label,(32,48))
@@ -90,6 +94,10 @@ def display_time():
 		screen.blit(label,(30,120))
 		pygame.display.update()
 		time.sleep(1)
+		if (backlight_state == True):
+			backlight_timer = backlight_timer + 1
+			if(backlight_timer == backlight_timeout):
+				backlight(False)
 
 def commandCallback(command,button,screenButton,bg_button):
 	command_thread = threading.Thread(target=launchCommand,args=(command,button,screenButton,bg_button,))
@@ -115,8 +123,19 @@ def rebootCallback():
 	print "Reboot"
 	os.system("reboot")
 
-
-
+def backlight(state):
+	global backlight_timer,backlight_state
+	backlight_timer = 0
+	os.system("echo 252 > /sys/class/gpio/export")
+	os.system("echo \'out\' > /sys/class/gpio/gpio252/direction")
+	if(state == False):
+		backlight_state = False
+		print "Backlight OFF"
+		os.system("echo '0' > /sys/class/gpio/gpio252/value")
+	if(state == True):
+		print "Backlight ON"
+		backlight_state = True
+		os.system("echo '1' > /sys/class/gpio/gpio252/value")
 
 # Global stuff -------------------------------------------------------------
 
@@ -124,6 +143,10 @@ screenMode      =  0      # Current screen mode; default = viewfinder
 screenModePrior = -1      # Prior screen mode (for detecting changes)
 global clock
 clock           =  False  # Last-used settings mode (default = storage)
+global backlight_timeout
+backlight_timeout = 300
+global backlight_state
+backlight_state = True
 iconPath        = 'icons' # Subdirectory containing UI bitmaps (PNG format)
 config_filename = 'config.ini'
 icons = [] # This list gets populated at startup
@@ -143,6 +166,7 @@ config = Config.Main(config_file)
 
 id_view = 0
 views = []
+backlight(True)
 while(True):
 	try:
 		views.append(Config.View(config_file,id_view))
@@ -239,34 +263,41 @@ clock_font_date = pygame.font.SysFont("arial", 32)
 scheduler = sched.scheduler(time.time, time.sleep)
 
 # Main loop ----------------------------------------------------------------
+try:
+	while(True):
+  	# Process touchscreen input
+  		while True:
+			for event in pygame.event.get():
+				if(event.type is MOUSEBUTTONDOWN):
+					pos = pygame.mouse.get_pos()
+					if(clock == False):
+						for b in buttons[screenMode]:
+							if b.selected(pos): break
+					elif(clock == True):
+						backlight(True)
+						for b in clock_buttons[0]:
+							if b.selected(pos): break
 
-while(True):
-  # Process touchscreen input
-  while True:
-	for event in pygame.event.get():
-		if(event.type is MOUSEBUTTONDOWN):
-			pos = pygame.mouse.get_pos()
-			if(clock == False):
-				for b in buttons[screenMode]:
-					if b.selected(pos): break
-			elif(clock == True):
-				for b in clock_buttons[0]:
-					if b.selected(pos): break
+			# If in viewfinder or settings modes, stop processing touchscreen
+			# and refresh the display to show the live preview.  In other modes
+			# (image playback, etc.), stop and refresh the screen only when
+			# screenMode changes.
+			if screenMode != screenModePrior: break
 
-	# If in viewfinder or settings modes, stop processing touchscreen
-	# and refresh the display to show the live preview.  In other modes
-	# (image playback, etc.), stop and refresh the screen only when
-	# screenMode changes.
-	if screenMode != screenModePrior: break
+  		img = None         # You get nothing, good day sir
+  		screen.fill((255,255,255))
 
-  img = None         # You get nothing, good day sir
-  screen.fill((255,255,255))
+ 		 # Overlay buttons on display and update
+  		print "Drawing Command"
+  		for i,b in enumerate(buttons[screenMode]):
+			b.draw(screen)
 
-  # Overlay buttons on display and update
-  print "Drawing Command"
-  for i,b in enumerate(buttons[screenMode]):
-	b.draw(screen)
+  		pygame.display.update()
 
-  pygame.display.update()
-
-  screenModePrior = screenMode
+ 	 	screenModePrior = screenMode
+except KeyboardInterrupt:
+	print "Quitting program"
+	if(clock == True):
+		clock = False
+	pygame.quit()
+	sys.exit()
